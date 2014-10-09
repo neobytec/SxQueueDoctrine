@@ -1,0 +1,43 @@
+{
+    "name": "sx/queue-doctrine",
+    "description": "Zend Framework 2 module that integrates with various queue management systems.",
+    "license": "BSD",
+    "type": "library",
+    "keywords": [
+        "zf2",
+        "queue",
+        "job"
+    ],
+    "homepage":"htitps://github.com/neobytec/SxQueueDoctrine",
+    "authors": [
+        {
+            "name": "Víctor Bueno",
+            "email": "byzor.s@gmail.com"
+        },
+        {
+            "name": "Pablo Vicioso",
+            "email": "t3cnico@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.3.3",
+        "zendframework/zend-servicemanager": "~2.2",
+        "zendframework/zend-stdlib": "~2.2"
+    },
+    "require-dev": {
+        "zendframework/zendframework": "~2.2",
+        "squizlabs/php_codesniffer": "1.5.*",
+        "phpunit/phpunit": "~4.1"
+    },
+    "suggest": {
+        "sx/queue": "If you are using Doctrine ORM"
+    },
+    "autoload": {
+        "psr-0": {
+            "SxQueueDoctrine": "src/"
+        },
+        "classmap": [
+            "./Module.php"
+        ]
+    }
+}
