@@ -22,14 +22,10 @@ use SxQueue\Job\JobInterface;
 use SxQueue\Job\JobPluginManager;
 use SxQueueDoctrine\Exception;
 use SxQueueDoctrine\Options\DoctrineOptions;
+use SxQueue\Job\AbstractJob;
 
 class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
 {
-    const STATUS_PENDING = 1;
-    const STATUS_RUNNING = 2;
-    const STATUS_DELETED = 3;
-    const STATUS_FAILED  = 4;
-
     const LIFETIME_DISABLED  = 0;
     const LIFETIME_UNLIMITED = -1;
 
@@ -84,8 +80,8 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
     private function printLog($message)
     {
         $now = new Datetime;
-        echo "\n" . $now->format("Y-m-s H:i:s") . 
-             " [" . $this->getName() . "] " . $message;
+        echo $now->format("Y-m-d H:i:s") . 
+             " [" . $this->getName() . "] " . $message . "\n";
     }
 
 
@@ -103,7 +99,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
 
         $entityObject->setQueue($this->getName())
                     ->setData($job->jsonSerialize())
-                    ->setStatus(self::STATUS_PENDING)
+                    ->setStatus(AbstractJob::JOB_STATUS_PENDING)
                     ->setDateScheduled($scheduled);
         $this->em->persist($entityObject);
         $this->em->flush();
@@ -118,10 +114,8 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
     {
         
         // Limpia tareas marcadas para borrar o completadas.
-        $this->printLog("Limpiando tabla.");
+//         $this->printLog("Limpiando tabla.");
         $this->purge();
-
-        $this->printLog("Buscando tareas...");
 
         try {
              // Borramos cache. Clear "descuelga" las entidades del manager.
@@ -142,7 +136,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                         ->orderBy('q.dateScheduled', 'ASC')
                         ->setParameters([
                             1 => $this->getName(),
-                            2 => static::STATUS_PENDING,
+                            2 => AbstractJob::JOB_STATUS_PENDING,
                             3 => new DateTime,
                             4 => $this->options->getMaxAttempts()
                         ])
@@ -150,22 +144,27 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                         ->getQuery();
     
             $selectQuery->setLockMode(LockMode::PESSIMISTIC_WRITE);
-            $queryResult = $selectQuery->getResult();
+            
+            try {
+                $job = $selectQuery->getSingleResult();
+            } catch (\Doctrine\ORM\NoResultException $e) {
+                
+            }
            
 
             // Si no se obtienen datos de BBDD, se activa el tiempo de idle configurado 
             // antes del siguiente bucle
-            if (empty($queryResult)) {
+            if (empty($job)) {
+                $this->printLog('No jobs found');
                 sleep($this->options->getSleepWhenIdle());
                 $this->em->getConnection()->rollback();
                 return null;
             }
 
-            $jobId       = $queryResult[0]->getId();
-            $jobAttempts = $queryResult[0]->getAttempts();
-            $jobData     = $queryResult[0]->getData();
+            $jobId       = $job->getId();
+            $jobAttempts = $job->getAttempts();
 
-            $this->printLog("Ejecutando nuevo Job. Id: ".$jobId);
+            $this->printLog("JOB {$jobId} FOUND ATTEMPT: {$jobAttempts} Execute");
 
             // Actualizar job
             $queryBuilder = $this->em->createQueryBuilder();    
@@ -177,7 +176,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                     ->setParameters([
                         1 => (int)$jobAttempts + 1,
                         2 => new Datetime,
-                        3 => static::STATUS_RUNNING,
+                        3 => AbstractJob::JOB_STATUS_RUNNING,
                         4 => $jobId,
                     ])
                     ->getQuery();  
@@ -190,10 +189,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
             throw new Exception\RuntimeException($e->getMessage(), $e->getCode(), $e);
         }
 
-        $data = json_decode($jobData, true);
-        $data['metadata']['id'] = $jobId;
-
-        return $this->createJob($data['class'], $data['content'], $data['metadata']);
+        return $this->createDoctrineJob($job);
     }
 
 
@@ -205,23 +201,23 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
     public function delete(JobInterface $job, array $options = array())
     {
         if ($this->options->getDeletedLifetime() === static::LIFETIME_DISABLED) {
-            $this->printLog("Borrado inmediato.");
+            $this->printLog("JOB {$job->getId()} DONE: Delete");
             $ref = $this->em->getReference($this->options->getEntityName(), $job->getId());
             $this->em->remove($ref);
             $this->em->flush();
 
         } else {
-            $this->printLog("Update status: pendiente de borrar.");
+            $this->printLog("JOB {$job->getId()} DONE: Status updated, pending to delete job");
             $queryBuilder = $this->em->createQueryBuilder();    
             $updateQuery = $queryBuilder->update($entityName = $this->options->getEntityName(), 'q')  
                     ->set('q.status', '?1')
                     ->set('q.dateFinished', '?2')
                     ->where('q.id = ?3 AND q.status = ?4')
                     ->setParameters([
-                        1 => static::STATUS_DELETED,
+                        1 => AbstractJob::JOB_STATUS_DELETED,
                         2 => new Datetime,
                         3 => $job->getId(),
-                        4 => static::STATUS_RUNNING
+                        4 => AbstractJob::JOB_STATUS_RUNNING
                     ])
                     ->getQuery();
 
@@ -239,12 +235,12 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
     public function failed(JobInterface $job, array $options = array())
     {
         if ($this->options->getFailedLifetime() === static::LIFETIME_DISABLED) {
-            $this->printLog("Borrando registro con errores. Id:".$job->getId());
+            $this->printLog("JOB {$job->getId()} ERROR: failed and delete");
 
             $ref = $this->em->getReference($this->options->getEntityName(), $job->getId());
             $this->em->remove($ref);
         } else {
-            $this->printLog("Guardando errores en tarea...".$job->getId());
+            $this->printLog("JOB {$job->getId()} ERROR: failed and saved");
             $message = isset($options['message']) ? $options['message'] : null;
             $trace   = isset($options['trace']) ? $options['trace'] : null;
 
@@ -271,10 +267,10 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                 $query->set('q.dateFinished',':dateFinished')
                       ->set('q.status', ':status')
                       ->setParameter('dateFinished', new Datetime)
-                      ->setParameter('status', static::STATUS_FAILED);
+                      ->setParameter('status', AbstractJob::JOB_STATUS_FAILED);
             } else {
                 $query->set('q.status', ':status')
-                      ->setParameter('status', static::STATUS_PENDING);
+                      ->setParameter('status', AbstractJob::JOB_STATUS_PENDING);
             }
             $q = $query->getQuery();
             $q->execute();
@@ -298,7 +294,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                     ->where('q.dateFinished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.dateFinished IS NOT NULL')  
                     ->setParameters([
                         1 => $failedLifetime,
-                        2 => static::STATUS_FAILED,
+                        2 => AbstractJob::JOB_STATUS_FAILED,
                         3 => $this->getName()
                     ])
                     ->getQuery();
@@ -315,7 +311,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                     ->where('q.dateFinished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.dateFinished IS NOT NULL')  
                     ->setParameters([
                         1 => $deletedLifetime,
-                        2 => static::STATUS_DELETED,
+                        2 => AbstractJob::JOB_STATUS_DELETED,
                         3 => $this->getName()
                     ])
                     ->getQuery();
@@ -396,5 +392,22 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
         }
 
         return $scheduled;
+    }
+    
+    /**
+     * 
+     * @param \Application\Db\Entity\Queue $jobQueue
+     * @return \SxQueue\Job\JobInterface
+     */
+    public function createDoctrineJob(\Application\Db\Entity\Queue $jobQueue)
+    {
+        $data = json_decode($jobQueue->getData(), true);
+        $data['metadata']['id'] = $jobQueue->getId();
+        
+        $job = parent::createJob($data['class'], $data['content'], $data['metadata']);
+
+        $job->setJobQueue($jobQueue);
+        
+        return $job;
     }
 }
