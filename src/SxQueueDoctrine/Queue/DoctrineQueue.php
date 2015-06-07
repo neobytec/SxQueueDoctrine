@@ -100,7 +100,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
         $entityObject->setQueue($this->getName())
                     ->setData($job->jsonSerialize())
                     ->setStatus(AbstractJob::JOB_STATUS_PENDING)
-                    ->setDateScheduled($scheduled);
+                    ->setScheduled($scheduled);
         $this->em->persist($entityObject);
         $this->em->flush();
 
@@ -130,10 +130,10 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
                         ->where(
                             'q.queue = ?1 AND
                              q.status = ?2 AND
-                             q.dateScheduled <= ?3 AND
+                             q.scheduled <= ?3 AND
                              q.attempts < ?4'
                         )
-                        ->orderBy('q.dateScheduled', 'ASC')
+                        ->orderBy('q.scheduled', 'ASC')
                         ->setParameters([
                             1 => $this->getName(),
                             2 => AbstractJob::JOB_STATUS_PENDING,
@@ -170,7 +170,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
             $queryBuilder = $this->em->createQueryBuilder();    
             $updateQuery = $queryBuilder->update($entityName, 'qu')  
                     ->set('qu.attempts', '?1')
-                    ->set('qu.dateExecuted', '?2')
+                    ->set('qu.executed', '?2')
                     ->set('qu.status', '?3')
                     ->where('qu.id = ?4')  
                     ->setParameters([
@@ -211,7 +211,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
             $queryBuilder = $this->em->createQueryBuilder();    
             $updateQuery = $queryBuilder->update($entityName = $this->options->getEntityName(), 'q')  
                     ->set('q.status', '?1')
-                    ->set('q.dateFinished', '?2')
+                    ->set('q.finished', '?2')
                     ->where('q.id = ?3 AND q.status = ?4')
                     ->setParameters([
                         1 => AbstractJob::JOB_STATUS_DELETED,
@@ -251,7 +251,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
             // Actualizar job con los errores
             $queryBuilder = $this->em->createQueryBuilder();
             $query = $queryBuilder->update($entityName, 'q')  
-                    ->set('q.dateFailed', '?1')
+                    ->set('q.failed', '?1')
                     ->set('q.message', '?2')
                     ->set('q.trace', '?3')
                     ->where('q.id = ?4')  
@@ -264,9 +264,9 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
 
 
             if ($jobData->getAttempts() >= ($this->options->getMaxAttempts()-1)) {
-                $query->set('q.dateFinished',':dateFinished')
+                $query->set('q.finished',':finished')
                       ->set('q.status', ':status')
-                      ->setParameter('dateFinished', new Datetime)
+                      ->setParameter('finished', new Datetime)
                       ->setParameter('status', AbstractJob::JOB_STATUS_FAILED);
             } else {
                 $query->set('q.status', ':status')
@@ -291,7 +291,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
 
             $queryBuilder = $this->em->createQueryBuilder();
             $deleteQuery  = $queryBuilder->delete($entityName, 'q')  
-                    ->where('q.dateFinished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.dateFinished IS NOT NULL')  
+                    ->where('q.finished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.finished IS NOT NULL')  
                     ->setParameters([
                         1 => $failedLifetime,
                         2 => AbstractJob::JOB_STATUS_FAILED,
@@ -308,7 +308,7 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
             
             $queryBuilder = $this->em->createQueryBuilder();
             $deleteQuery  = $queryBuilder->delete($entityName, 'q')  
-                    ->where('q.dateFinished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.dateFinished IS NOT NULL')  
+                    ->where('q.finished < ?1 AND q.status = ?2 AND q.queue = ?3 AND q.finished IS NOT NULL')  
                     ->setParameters([
                         1 => $deletedLifetime,
                         2 => AbstractJob::JOB_STATUS_DELETED,
@@ -396,17 +396,17 @@ class DoctrineQueue extends AbstractQueue implements DoctrineQueueInterface
     
     /**
      * 
-     * @param \Application\Db\Entity\Queue $jobQueue
+     * @param DoctrineQueueEntityInterface $jobQueue
      * @return \SxQueue\Job\JobInterface
      */
-    public function createDoctrineJob(\Application\Db\Entity\Queue $jobQueue)
+    public function createDoctrineJob(DoctrineQueueEntityInterface $jobQueue)
     {
         $data = json_decode($jobQueue->getData(), true);
         $data['metadata']['id'] = $jobQueue->getId();
         
         $job = parent::createJob($data['class'], $data['content'], $data['metadata']);
 
-        $job->setJobQueue($jobQueue);
+        $job->setQueue($jobQueue->getQueue());
         
         return $job;
     }
